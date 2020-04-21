@@ -1,4 +1,4 @@
-ARG SYSTEM_IMAGE=ubuntu:18.04
+ARG SYSTEM_IMAGE=ubuntu:20.04
 
 #
 # Base
@@ -19,7 +19,11 @@ RUN set -ex \
 		locales \
 		locales-all \
 		software-properties-common \
-	&& rm -rf /var/lib/apt/lists/*
+		python3 \
+		python3-pip \
+		python3-venv \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& update-alternatives --install /usr/bin/python python /usr/bin/python3.8 1
 
 # Set the locale
 RUN locale-gen en_US.UTF-8
@@ -31,13 +35,12 @@ ENV LC_ALL en_US.UTF-8
 RUN set -ex \
 	&& curl -s https://packages.archivematica.org/GPG-KEY-archivematica | apt-key add - \
 	&& add-apt-repository --no-update --yes "deb [arch=amd64] http://packages.archivematica.org/1.11.x/ubuntu-externals bionic main" \
-	&& add-apt-repository --no-update --yes "deb http://archive.ubuntu.com/ubuntu/ bionic multiverse" \
-	&& add-apt-repository --no-update --yes "deb http://archive.ubuntu.com/ubuntu/ bionic-security universe" \
-	&& add-apt-repository --no-update --yes "deb http://archive.ubuntu.com/ubuntu/ bionic-updates multiverse" \
+	&& add-apt-repository --no-update --yes "deb http://archive.ubuntu.com/ubuntu/ focal multiverse" \
+	&& add-apt-repository --no-update --yes "deb http://archive.ubuntu.com/ubuntu/ focal-security universe" \
+	&& add-apt-repository --no-update --yes "deb http://archive.ubuntu.com/ubuntu/ focal-updates multiverse" \
 	&& apt-get update \
 	&& apt-get install -y --no-install-recommends \
 		atool \
-		bulk-extractor \
 		clamav \
 		ffmpeg \
 		ghostscript \
@@ -50,7 +53,6 @@ RUN set -ex \
 		libevent-dev \
 		libjansson4 \
 		mediainfo \
-		mediaconch \
 		nailgun \
 		openjdk-8-jre-headless \
 		p7zip-full \
@@ -61,11 +63,13 @@ RUN set -ex \
 		sleuthkit \
 		tesseract-ocr \
 		tree \
-		ufraw \
 		unar \
 		unrar-free \
 		uuid \
 	&& rm -rf /var/lib/apt/lists/*
+
+# Excluded packages
+# ufraw, bulk-extrator, mediaconch
 
 # Download ClamAV virus signatures
 RUN freshclam --quiet
@@ -91,17 +95,13 @@ ENV DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE}
 COPY ./a3m/externals/fido/ /usr/lib/archivematica/archivematicaCommon/externals/fido/
 COPY ./a3m/externals/fiwalk_plugins/ /usr/lib/archivematica/archivematicaCommon/externals/fiwalk_plugins/
 
-RUN set -ex \
-	&& add-apt-repository ppa:deadsnakes/ppa \
-	&& apt-get update \
-	&& apt-get install -y --no-install-recommends python3.7 \
-	&& update-alternatives --install /usr/bin/python python /usr/bin/python3.7 1 \
-	&& curl https://bootstrap.pypa.io/get-pip.py | python \
-	&& rm -rf /var/lib/apt/lists/*
-
 COPY ./requirements.txt /a3m/requirements.txt
 COPY ./requirements-dev.txt /a3m/requirements-dev.txt
-RUN python -m pip install -r ${REQUIREMENTS}
+
+RUN python -m venv /a3m-venv
+ENV PATH="/a3m-venv/bin:$PATH"
+RUN python -m pip install --upgrade pip \
+	&& python -m pip install -r ${REQUIREMENTS}
 
 COPY . /a3m
 WORKDIR /a3m
