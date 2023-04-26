@@ -14,9 +14,13 @@ from a3m.bag import is_bag
 from a3m.client import metrics
 from a3m.executeOrRunSubProcess import executeOrRun
 
+import boto3
+from botocore.client import Config
+from botocore.exceptions import ClientError
 
 HTTP_SCHEMES = ("http", "https")
 FILE_SCHEMES = "file"
+S3_SCHEMES = "s3"
 
 EXTRACTABLE_PUIDS = (
     "fmt/411",
@@ -125,6 +129,69 @@ def _process_file_url(job, path, transfer_path, transfer_id):
         raise RetrievalError(f"Type of file not supported {path}")
 
     _transfer_file(job, path, transfer_path, transfer_id, copy=True)
+    
+def _process_s3_url(job, path, transfer_path, transfer_id):
+    boto_args = {"service_name": "s3"}
+    if settings.S3_ENDPOINT_URL:
+        boto_args.update(endpoint_url=settings.S3_ENDPOINT_URL)
+    if settings.S3_REGION_NAME:
+        boto_args.update(region_name=settings.S3_REGION_NAME)
+    if settings.S3_ACCESS_KEY_ID and settings.S3_SECRET_ACCESS_KEY:
+        boto_args.update(
+            aws_access_key_id=settings.S3_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
+        )
+    if settings.S3_USE_SSL:
+        boto_args.update(use_ssl=settings.S3_USE_SSL)
+
+    s3_config = {}
+    if settings.S3_ADDRESSING_STYLE:
+        s3_config.update(addressing_style=settings.S3_ADDRESSING_STYLE)
+    if settings.S3_SIGNATURE_VERSION:
+        s3_config.update(signature_version=settings.S3_SIGNATURE_VERSION)
+    if s3_config:
+        config = Config(s3=s3_config)
+        boto_args.update(config=config)
+
+    s3 = boto3.resource(**boto_args)
+    
+    # Download file/folder
+    bucket_name = settings.S3_BUCKET
+    bucket = s3.Bucket(bucket_name)
+    obj = bucket.Object(path)
+    
+    try:
+        obj.load()
+    except ClientError as error:
+        if error.response['Error']['Code'] == '404':
+            raise RetrievalError(f'The file {path} does not exist in the bucket {bucket_name}.')
+        else:
+            raise RetrievalError(f'Error occurred: {error}')
+    else:
+        with _create_tmpdir(transfer_id, purpose="download") as tmp_dir:
+            if obj.key.endswith('/'): # Directory
+                for obj_summary in bucket.objects.filter(Prefix=obj.key):
+                    sub_obj = bucket.Object(obj_summary.key)
+                    if sub_obj.key.endswith('/'):
+                        continue
+                    local_sub_path = tmp_dir / sub_obj.key
+                    local_sub_path.parent.mkdir(parents=True, exist_ok=True)
+                    sub_obj.download_file(str(local_sub_path))
+                    #job.print_output(f"Downloaded {s3_obj.key} to {local_sub_path}")
+                    if not local_sub_path.is_file():
+                        raise RetrievalError(f"Type of file not supported {sub_obj.key}")
+                    
+                shutil.copytree(str(tmp_dir), str(transfer_path), symlinks=False)
+                
+            else: # File
+                local_sub_path = tmp_dir / sub_obj.key
+                local_sub_path.parent.mkdir(parents=True, exist_ok=True)
+                obj.download_file(str(local_sub_path))
+                #job.print_output(f"Downloaded {obj.key} to {local_sub_path}")
+                if not local_sub_path.is_file():
+                    raise RetrievalError(f"Type of file not supported {path}")
+                
+                _transfer_file(job, local_sub_path, transfer_path, transfer_id, copy=False)
 
 
 def main(job, transfer_id, transfer_path, url):
@@ -144,6 +211,8 @@ def main(job, transfer_id, transfer_path, url):
             _process_http_url(job, parsed, Path(transfer_path), transfer_id)
         elif parsed.scheme in FILE_SCHEMES:
             _process_file_url(job, Path(parsed.path), Path(transfer_path), transfer_id)
+        elif parsed.scheme in S3_SCHEMES:
+            _process_s3_url(job, parsed.path.lstrip('/'), Path(transfer_path), transfer_id)
         else:
             job.pyprint(f"Unsupported URL scheme: {parsed.scheme}", file=sys.stderr)
             return 1
