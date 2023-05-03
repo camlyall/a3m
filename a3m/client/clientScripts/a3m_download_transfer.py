@@ -184,7 +184,7 @@ def _process_s3_url(job, path, transfer_path, transfer_id):
                 shutil.copytree(str(tmp_dir), str(transfer_path), symlinks=False)
                 
             else: # File
-                local_sub_path = tmp_dir / sub_obj.key
+                local_sub_path = tmp_dir / obj.key
                 local_sub_path.parent.mkdir(parents=True, exist_ok=True)
                 obj.download_file(str(local_sub_path))
                 #job.print_output(f"Downloaded {obj.key} to {local_sub_path}")
